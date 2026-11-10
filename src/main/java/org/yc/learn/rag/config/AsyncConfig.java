@@ -1,0 +1,29 @@
+package org.yc.learn.rag.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.time.Duration;
+
+/**
+ * 后台执行器。Java 21 虚拟线程足够轻量，阻塞等待模型 / 向量库不会占满平台线程。
+ * <p>
+ * 关闭时留出有限宽限时间，避免大批量入库让进程无法退出。
+ *
+ * @author zhengyanchuang
+ */
+@Configuration
+public class AsyncConfig {
+
+    /** 流式对话使用 */
+    @Bean(destroyMethod = "shutdown")
+    public ManagedVirtualThreadExecutor chatExecutor() {
+        return new ManagedVirtualThreadExecutor("chat", Duration.ofSeconds(5));
+    }
+
+    /** 文档异步入库使用，和对话隔离，避免大批量入库影响聊天 */
+    @Bean(destroyMethod = "shutdown")
+    public ManagedVirtualThreadExecutor ingestionExecutor() {
+        return new ManagedVirtualThreadExecutor("ingestion", Duration.ofSeconds(10));
+    }
+}

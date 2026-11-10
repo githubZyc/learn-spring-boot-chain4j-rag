@@ -1,0 +1,76 @@
+spring:
+  application:
+    name: learn-spring-boot-chain4j-rag
+  config:
+    # 可选：本地 .env（properties 格式）存放 DASHSCOPE_API_KEY，不提交仓库
+    import: optional:file:.env[.properties]
+  datasource:
+    # AUTO_SERVER 允许 IDEA / 命令行同时查看同一个库（H2 不支持与 DB_CLOSE_ON_EXIT 同用）
+    url: jdbc:h2:file:./data/ragdb;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+  mvc:
+    async:
+      # 必须 >= app.sse.timeout-ms，否则长回答会被 MVC 提前超时
+      request-timeout: 300000
+
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+
+# DashScope starter 根据各模型下 api-key 是否存在决定是否创建 Bean，
+# 因此 streaming-chat-model 和 embedding-model 都要配置 api-key。
+langchain4j:
+  community:
+    dashscope:
+      streaming-chat-model:
+        api-key: ${DASHSCOPE_API_KEY:}
+        model-name: ${DASHSCOPE_CHAT_MODEL:deepseek-v4.1-flash-1017}
+        is-multimodal-model: ${DASHSCOPE_CHAT_MULTIMODAL:true}
+        temperature: ${DASHSCOPE_CHAT_TEMPERATURE:0.3}
+      embedding-model:
+        api-key: ${DASHSCOPE_API_KEY:}
+        model-name: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v3}
+        dimension: ${DASHSCOPE_EMBEDDING_DIMENSION:1024}
+  rag:
+    retrieval:
+      max-results: ${RAG_MAX_RESULTS:5}
+      min-score: ${RAG_MIN_SCORE:0.5}
+
+app:
+  upload-dir: ${APP_UPLOAD_DIR:./data/uploads}
+  max-file-size-bytes: ${APP_MAX_FILE_SIZE:10485760}
+  sse:
+    timeout-ms: ${SSE_TIMEOUT_MS:300000}
+  qdrant:
+    host: ${QDRANT_HOST:localhost}
+    grpc-port: ${QDRANT_GRPC_PORT:6334}
+    use-tls: ${QDRANT_USE_TLS:false}
+    collection: ${QDRANT_COLLECTION:knowledge_base}
+  rag:
+    chunk-size: ${RAG_CHUNK_SIZE:800}
+    chunk-overlap: ${RAG_CHUNK_OVERLAP:100}
+    embedding-batch-size: ${RAG_EMBEDDING_BATCH_SIZE:10}
+  memory:
+    max-messages: ${CHAT_MEMORY_MAX_MESSAGES:20}
+
+logging:
+  level:
+    dev.langchain4j: INFO
+    org.yc.learn.rag: INFO

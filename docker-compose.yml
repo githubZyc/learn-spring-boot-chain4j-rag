@@ -1,0 +1,13 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.17.1
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST / Dashboard
+      - "6334:6334"   # gRPC（langchain4j 使用这个端口）
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  qdrant_storage:
