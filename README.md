@@ -2,13 +2,13 @@
 
 基于 **Spring Boot 3.5 + langchain4j 1.23 + Qdrant + Vue 3** 的知识库（RAG）实战项目。
 
-上传 `.md` / `.txt` 文档 → 切分 → 向量化写入 Qdrant → 基于知识库进行 **SSE 流式问答**，并展示引用来源。
+上传 `.md` / `.txt` / `.pdf` 文档 → 切分 → 向量化写入 Qdrant → 基于知识库进行 **SSE 流式问答**，并展示引用来源。
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 后端 | Java 21、Spring Boot 3.5.16、Spring Data JPA、H2 |
+| 后端 | Java 21、Spring Boot 3.5.16、Spring Data JPA、H2、PDFBox（PDF 解析） |
 | LLM / RAG | langchain4j 1.23.0、`@AiService`、TokenStream、Qwen(DashScope) |
 | 向量库 | Qdrant `v1.17.1`（gRPC 6334） |
 | 前端 | Vue 3.5、Vite 5、TypeScript、Element Plus |
@@ -27,6 +27,7 @@ learn-spring-boot-chain4j-rag/
 │   ├── config/                     # Qdrant、ChatMemoryProvider、执行器
 │   ├── controller/                 # 文档管理 + 流式问答
 │   ├── service/                    # 入库、向量删除、SSE
+│   ├── extractor/                  # 文件类型 → 文本的策略实现（TXT/MD/PDF）
 │   ├── domain/ repository/ dto/    # H2 文档元数据
 │   └── util/TextNormalizer.java
 ├── src/main/resources/application.yml
@@ -107,7 +108,7 @@ npm run build
 
 ## 功能说明
 
-- **文档管理**：拖拽上传 `.md` / `.txt`（≤10MB）。上传接口立即返回 `PENDING`，解析、切分、向量化在后台线程执行，前端轮询列表状态；支持删除与重建索引。
+- **文档管理**：拖拽上传 `.md` / `.txt` / `.pdf`（≤10MB）。上传接口立即返回 `PENDING`，解析、切分、向量化在后台线程执行，前端轮询列表状态；支持删除与重建索引。
 - **知识问答**：基于 Qdrant 检索 top-5 片段，SSE 逐 token 输出；回答附带引用来源（文件名、chunk、相似度、片段预览）。
 - **会话记忆**：按 `conversationId` 隔离，`MessageWindowChatMemory` 保留最近 20 条；“新会话”会清理后端记忆。
 - **失败可追踪**：入库失败的文档仍会保留记录，并在列表中展示失败原因，可重新索引；应用重启时残留的 `PENDING`/`PROCESSING` 会自动标记为 `FAILED`，避免卡死。
@@ -164,5 +165,6 @@ curl -s -X POST http://localhost:6333/collections/knowledge_base/points/scroll \
 
 ## 已知限制
 
-- 仅支持 UTF-8 编码的 `.md` / `.txt`；PDF/Word 可通过引入 `langchain4j-document-parser-*` 扩展。
+- 文本文件需为 UTF-8 编码；PDF 仅支持带文字层的版本，扫描件需要 OCR 扩展。
+- 新增文件类型只需实现 `DocumentTextExtractor`，无需改动入库流程（见 `CLAUDE.md` 第 5.1 节）。
 - 单知识库（单 Qdrant collection）、无鉴权、会话记忆仅进程内保存。

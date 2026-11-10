@@ -10,6 +10,7 @@ import org.yc.learn.rag.domain.DocumentEntity;
 import org.yc.learn.rag.domain.DocumentStatus;
 import org.yc.learn.rag.dto.DocumentDto;
 import org.yc.learn.rag.exception.ApiException;
+import org.yc.learn.rag.extractor.TextExtractorRegistry;
 import org.yc.learn.rag.repository.DocumentRepository;
 
 import java.io.IOException;
@@ -19,8 +20,8 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 文档上传、列表、删除与重建索引。
@@ -34,30 +35,32 @@ import java.util.UUID;
 public class DocumentService {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
-    private static final Set<String> SUPPORTED_TYPES = Set.of("md", "txt", "pdf");
     private static final Duration CANCEL_TIMEOUT = Duration.ofSeconds(60);
 
     private final DocumentRepository repository;
     private final IngestionService ingestionService;
     private final VectorStoreService vectorStoreService;
+    private final TextExtractorRegistry textExtractorRegistry;
     private final AppProperties properties;
 
     public DocumentService(DocumentRepository repository,
                            IngestionService ingestionService,
                            VectorStoreService vectorStoreService,
+                           TextExtractorRegistry textExtractorRegistry,
                            AppProperties properties) {
         this.repository = repository;
         this.ingestionService = ingestionService;
         this.vectorStoreService = vectorStoreService;
+        this.textExtractorRegistry = textExtractorRegistry;
         this.properties = properties;
     }
 
     public DocumentDto upload(MultipartFile file) {
         String fileName = sanitizeFileName(file);
         String extension = extensionOf(fileName);
-        if (!SUPPORTED_TYPES.contains(extension)) {
+        if (!textExtractorRegistry.supports(extension)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "UNSUPPORTED_FILE_TYPE",
-                    "支持 .md 、.txt 和 .pdf 文件");
+                    "支持的文件类型：" + supportedTypesText());
         }
         if (file.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "EMPTY_FILE", "上传的文件为空");
@@ -153,6 +156,13 @@ public class DocumentService {
     private static String extensionOf(String fileName) {
         int dot = fileName.lastIndexOf('.');
         return dot < 0 ? "" : fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
+    }
+
+    private String supportedTypesText() {
+        return textExtractorRegistry.supportedTypes().stream()
+                .map(type -> "." + type.toLowerCase(Locale.ROOT))
+                .sorted()
+                .collect(Collectors.joining("、"));
     }
 
     private static void deleteFileQuietly(String storedPath) {

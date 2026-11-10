@@ -17,12 +17,11 @@ import org.yc.learn.rag.config.AppProperties;
 import org.yc.learn.rag.config.ManagedVirtualThreadExecutor;
 import org.yc.learn.rag.domain.DocumentEntity;
 import org.yc.learn.rag.domain.DocumentStatus;
+import org.yc.learn.rag.extractor.TextExtractorRegistry;
 import org.yc.learn.rag.repository.DocumentRepository;
 import org.yc.learn.rag.util.TextNormalizer;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -50,6 +49,7 @@ public class IngestionService {
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final VectorStoreService vectorStoreService;
+    private final TextExtractorRegistry textExtractorRegistry;
     private final AppProperties properties;
     private final ManagedVirtualThreadExecutor ingestionExecutor;
 
@@ -62,12 +62,14 @@ public class IngestionService {
                             EmbeddingModel embeddingModel,
                             EmbeddingStore<TextSegment> embeddingStore,
                             VectorStoreService vectorStoreService,
+                            TextExtractorRegistry textExtractorRegistry,
                             AppProperties properties,
                             @Qualifier("ingestionExecutor") ManagedVirtualThreadExecutor ingestionExecutor) {
         this.repository = repository;
         this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
         this.vectorStoreService = vectorStoreService;
+        this.textExtractorRegistry = textExtractorRegistry;
         this.properties = properties;
         this.ingestionExecutor = ingestionExecutor;
     }
@@ -174,7 +176,7 @@ public class IngestionService {
 
     private List<TextSegment> split(DocumentEntity entity) throws IOException {
         Path path = Path.of(entity.getStoredPath());
-        String text = TextNormalizer.normalize(Files.readString(path, StandardCharsets.UTF_8));
+        String text = TextNormalizer.normalize(textExtractorRegistry.extract(entity.getFileType(), path));
         if (TextNormalizer.isBlank(text)) {
             throw new IllegalArgumentException("文档内容为空");
         }
