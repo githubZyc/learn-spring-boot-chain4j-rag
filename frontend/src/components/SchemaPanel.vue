@@ -167,11 +167,16 @@ function askSample(sample: string) {
 
       <div v-else-if="mode === 'query' && queryResult" class="query-result">
         <div class="query-head">
-          <div>
-            <strong>{{ queryResult.tableName }}</strong>
-            <span v-if="queryResult.tableComment" class="comment">
-              {{ queryResult.tableComment }}
-            </span>
+          <div class="query-tables">
+            <el-tag
+              v-for="table in queryResult.tables"
+              :key="table.tableName"
+              size="small"
+              type="success"
+            >
+              {{ table.tableName }}
+              <span v-if="table.tableComment"> · {{ table.tableComment }}</span>
+            </el-tag>
           </div>
           <span class="query-meta">
             返回 {{ queryResult.rowCount }} 行 · {{ queryResult.costMs }}ms
@@ -335,6 +340,12 @@ function askSample(sample: string) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.query-tables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .query-meta {

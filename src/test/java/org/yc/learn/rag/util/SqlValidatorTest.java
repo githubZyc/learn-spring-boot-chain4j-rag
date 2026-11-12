@@ -2,6 +2,8 @@ package org.yc.learn.rag.util;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -65,7 +67,34 @@ class SqlValidatorTest {
         assertThatThrownBy(() -> SqlValidator.validateAndNormalize(
                 "SELECT * FROM e__dzblmx", "e__dzbl"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("只允许查询表");
+                .hasMessageContaining("只允许查询已授权的表");
+    }
+
+    @Test
+    void allowsMultiTableJoinWithinAllowedSet() {
+        SqlValidator.ValidatedSql validated = SqlValidator.validateAndNormalize(
+                "SELECT a.id, b.record_id FROM e__dzbl a "
+                        + "JOIN hospital_surgical_qc_record b ON b.id = a.record_id",
+                Set.of("e__dzbl", "hospital_surgical_qc_record"));
+
+        assertThat(validated.executableSql()).startsWith("SELECT * FROM (").endsWith("LIMIT 200");
+        assertThat(validated.displaySql()).contains("JOIN hospital_surgical_qc_record");
+    }
+
+    @Test
+    void inspectsAllReferencedTables() {
+        SqlValidator.InspectedSql inspected = SqlValidator.inspect(
+                "SELECT * FROM a JOIN b ON a.id = b.id JOIN c ON c.id = a.id");
+
+        assertThat(inspected.tables()).containsExactlyInAnyOrder("a", "b", "c");
+    }
+
+    @Test
+    void rejectsCommaJoin() {
+        assertThatThrownBy(() -> SqlValidator.inspect(
+                "SELECT * FROM e__dzbl a, hospital_surgical_qc_record b WHERE a.id = b.id"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("JOIN");
     }
 
     @Test

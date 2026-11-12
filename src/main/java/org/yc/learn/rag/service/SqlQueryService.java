@@ -13,13 +13,19 @@ import org.yc.learn.rag.connector.mysql.MySqlSchemaExtractor;
 import org.yc.learn.rag.connector.mysql.QueryResult;
 import org.yc.learn.rag.dto.SchemaMatchDto;
 import org.yc.learn.rag.dto.SqlQueryResponse;
+import org.yc.learn.rag.dto.SqlTableRefDto;
 import org.yc.learn.rag.exception.ApiException;
 import org.yc.learn.rag.util.SensitiveMasker;
 import org.yc.learn.rag.util.SqlValidator;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
@@ -27,10 +33,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * 自然语言查数（NL2SQL）编排。
+ * 自然语言查数（NL2SQL）编排，支持多表关联。
  * <p>
- * 流程：找表 → 读取单表最新结构 → 模型生成 SQL → 安全校验 → 只读执行 → 敏感字段脱敏。
- * 模型生成的 SQL 不直接执行，必须经过 {@link SqlValidator}。
+ * 流程：检索候选表 → 把多张表结构一起交给模型 → 模型生成 SQL →
+ * 若 SQL 引用了尚未加载的表，按需加载后重试 → 安全校验 → 只读执行 → 敏感字段脱敏。
+ * <p>
+ * 测试环境不做表级权限：只要表在当前库中存在就允许查询；仍然禁止写操作、注释、多语句，
+ * 并强制外层 {@code LIMIT 200}。
  *
  * @author zhengyanchuang
  */
@@ -41,8 +50,7 @@ public class SqlQueryService {
 
     private static final int MAX_ROWS = 200;
     private static final int QUERY_TIMEOUT_SECONDS = 10;
-    private static final int MAX_CANDIDATES = 3;
-    private static final int SCHEMA_TEXT_LIMIT = 6000;
+    private static final int SCHEMA_TEXT_LIMIT = 16000;
     private static final long SQL_GENERATION_TIMEOUT_SECONDS = 60;
 
     private final SchemaSearchService schemaSearchService;
@@ -70,28 +78,74 @@ public class SqlQueryService {
                     "未配置数据库连接，请设置 SCHEMA_DB_URL / SCHEMA_DB_USERNAME / SCHEMA_DB_PASSWORD");
         }
 
-        List<SchemaMatchDto> candidates = schemaSearchService.search(question, MAX_CANDIDATES);
+        AppProperties.Query queryConfig = schema.query();
+        int maxTables = queryConfig == null ? 8 : Math.max(1, queryConfig.maxTables());
+        int maxExpansions = queryConfig == null ? 2 : Math.max(0, queryConfig.maxExpansions());
+        ConnectorConfig config = SchemaDatasourceSupport.connectorConfig(schema.datasource());
+
+        // 首轮：向量检索 + 主表优先重排，取前 N 张表
+        List<SchemaMatchDto> candidates = schemaSearchService.search(question, maxTables);
         if (candidates.isEmpty()) {
             throw new ApiException(HttpStatus.NOT_FOUND, "SCHEMA_TABLE_NOT_FOUND",
                     "没有找到与问题匹配的表，请先同步表结构或换个问法");
         }
-        String tableName = pickTable(question, candidates);
+        Set<String> allowedTables = candidates.stream()
+                .map(SchemaMatchDto::tableName)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, SchemaDocument> schemas = loadSchemas(config, allowedTables);
 
-        ConnectorConfig config = SchemaDatasourceSupport.connectorConfig(schema.datasource());
-        SchemaDocument document;
-        try {
-            document = schemaExtractor.extractTable(config, tableName);
-        } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "SCHEMA_TABLE_NOT_FOUND", e.getMessage(), e);
+        // 生成 → 检查引用表 → 缺表则加载并重试
+        String generated = generateSql(question, schemas.values());
+        SqlValidator.InspectedSql inspected = SqlValidator.inspect(generated);
+        Set<String> existingTables = null;
+
+        for (int attempt = 0; attempt < maxExpansions; attempt++) {
+            Set<String> missing = missingTables(inspected.tables(), allowedTables);
+            if (missing.isEmpty()) {
+                break;
+            }
+            if (existingTables == null) {
+                existingTables = schemaExtractor.listTableNames(config);
+            }
+            LinkedHashSet<String> resolved = new LinkedHashSet<>();
+            for (String table : missing) {
+                String canonical = findIgnoreCase(existingTables, table);
+                if (canonical == null) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "SQL_REJECTED",
+                            "SQL 引用了不存在的表：" + table);
+                }
+                resolved.add(canonical);
+            }
+            log.info("SQL 引用了未加载的表，自动扩展：{}", resolved);
+            allowedTables.addAll(resolved);
+            schemas = loadSchemas(config, allowedTables);
+            generated = generateSql(question, schemas.values());
+            inspected = SqlValidator.inspect(generated);
         }
 
-        String generated = generateSql(question, document);
+        Set<String> stillMissing = missingTables(inspected.tables(), allowedTables);
+        if (!stillMissing.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "SQL_REJECTED",
+                    "SQL 引用了未加载的表：" + String.join(",", stillMissing));
+        }
+
+        // 测试环境不做表级权限：只校验引用的表在库中存在
+        if (existingTables == null) {
+            existingTables = schemaExtractor.listTableNames(config);
+        }
+        for (String table : inspected.tables()) {
+            if (findIgnoreCase(existingTables, table) == null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "SQL_REJECTED",
+                        "SQL 引用了不存在的表：" + table);
+            }
+        }
+
         SqlValidator.ValidatedSql validated;
         try {
-            validated = SqlValidator.validateAndNormalize(generated, tableName);
+            validated = SqlValidator.validateAndNormalize(inspected.cleanedSql(), existingTables);
         } catch (IllegalArgumentException e) {
-            log.warn("SQL 安全校验未通过：table={}, generated={}, reason={}",
-                    tableName, generated, e.getMessage());
+            log.warn("SQL 安全校验未通过：tables={}, generated={}, reason={}",
+                    inspected.tables(), generated, e.getMessage());
             throw new ApiException(HttpStatus.BAD_REQUEST, "SQL_REJECTED",
                     "生成的 SQL 未通过安全校验：" + e.getMessage(), e);
         }
@@ -101,20 +155,33 @@ public class SqlQueryService {
         try {
             result = queryExecutor.execute(config, validated.executableSql(), MAX_ROWS, QUERY_TIMEOUT_SECONDS);
         } catch (RuntimeException e) {
-            log.error("SQL 执行失败：table={}, sql={}", tableName, validated.displaySql(), e);
+            log.error("SQL 执行失败：tables={}, sql={}", inspected.tables(), validated.displaySql(), e);
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "SQL_EXECUTION_FAILED",
                     "查询执行失败，请检查字段或时间条件", e);
         }
         long costMs = (System.nanoTime() - start) / 1_000_000;
 
-        MaskedResult masked = mask(result, document.sensitiveColumns());
-        log.info("数据库查数完成：table={}, rows={}, costMs={}, sql={}",
-                tableName, result.rows().size(), costMs, validated.displaySql());
+        Map<String, SchemaDocument> finalSchemas = schemas;
+        List<SqlTableRefDto> usedTables = inspected.tables().stream()
+                .map(table -> findSchema(finalSchemas, table))
+                .filter(Objects::nonNull)
+                .map(document -> new SqlTableRefDto(document.tableName(), document.tableComment()))
+                .toList();
+        List<String> sensitiveColumns = inspected.tables().stream()
+                .map(table -> findSchema(finalSchemas, table))
+                .filter(Objects::nonNull)
+                .flatMap(document -> document.sensitiveColumns().stream())
+                .distinct()
+                .toList();
+
+        MaskedResult masked = mask(result, sensitiveColumns);
+        log.info("数据库查数完成：tables={}, rows={}, costMs={}, sql={}",
+                usedTables.stream().map(SqlTableRefDto::tableName).toList(),
+                result.rows().size(), costMs, validated.displaySql());
 
         return new SqlQueryResponse(
                 question,
-                tableName,
-                document.tableComment(),
+                usedTables,
                 validated.displaySql(),
                 result.columns(),
                 masked.rows(),
@@ -124,38 +191,54 @@ public class SqlQueryService {
     }
 
     /**
-     * 用户问题里明确出现了候选表名时优先使用，否则用重排后的第一张表。
+     * 加载一批表的完整结构；缺少任一表都视为失败，避免模型基于残缺上下文生成 SQL。
      */
-    private static String pickTable(String question, List<SchemaMatchDto> candidates) {
-        String lower = question.toLowerCase(Locale.ROOT);
-        for (SchemaMatchDto candidate : candidates) {
-            if (lower.contains(candidate.tableName().toLowerCase(Locale.ROOT))) {
-                return candidate.tableName();
-            }
+    private Map<String, SchemaDocument> loadSchemas(ConnectorConfig config, Set<String> tableNames) {
+        List<SchemaDocument> documents = schemaExtractor.extractTables(config, tableNames);
+        Map<String, SchemaDocument> byName = new LinkedHashMap<>();
+        for (SchemaDocument document : documents) {
+            byName.put(document.tableName(), document);
         }
-        return candidates.get(0).tableName();
+        Set<String> missing = missingTables(tableNames, byName.keySet());
+        if (!missing.isEmpty()) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "SCHEMA_TABLE_NOT_FOUND",
+                    "表不存在或未授权：" + String.join(",", missing));
+        }
+        return byName;
     }
 
-    private String generateSql(String question, SchemaDocument document) {
-        String schemaText = document.toEmbeddingText();
+    private String generateSql(String question, Collection<SchemaDocument> schemas) {
+        String schemaText = schemas.stream()
+                .map(SchemaDocument::toEmbeddingText)
+                .collect(Collectors.joining("\n---\n"));
         if (schemaText.length() > SCHEMA_TEXT_LIMIT) {
-            schemaText = schemaText.substring(0, SCHEMA_TEXT_LIMIT) + "\n...（字段过多，已截断）";
+            schemaText = schemaText.substring(0, SCHEMA_TEXT_LIMIT) + "\n...（表结构过多，已截断）";
         }
+        String tableList = schemas.stream()
+                .map(document -> document.tableComment().isBlank()
+                        ? document.tableName()
+                        : document.tableName() + "（" + document.tableComment() + "）")
+                .collect(Collectors.joining("、"));
+
         String prompt = """
-                你是 MySQL 5.7/8.0 的只读 SQL 生成器。只能使用下面给出的表结构，不要编造字段。
+                你是 MySQL 5.7/8.0 的只读 SQL 生成器。
+                可以使用下面列出的多张表，允许 JOIN，表数量不限；只能使用列出的表和字段，不要编造。
                 规则：
                 1. 只生成一条 SELECT 查询；
                 2. 禁止 INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE 等写操作；
                 3. 涉及“今天 / 最近 N 天”时，优先使用“默认时间字段”，没有则使用表中最合适的时间字段；
                 4. 不要自己加 LIMIT，系统会自动限制返回行数；
-                5. 不要使用 CTE（WITH）、窗口函数等 MySQL 5.7 不支持的语法；
-                6. 只输出 SQL，不要解释，不要 markdown 代码块。
+                5. 多表关联请使用 JOIN，不要使用逗号连接表；
+                6. 不要使用 CTE（WITH）、窗口函数等 MySQL 5.7 不支持的语法；
+                7. 只输出 SQL，不要解释，不要 markdown 代码块。
+
+                可用表：%s
 
                 表结构：
                 %s
 
                 用户问题：%s
-                """.formatted(schemaText, question);
+                """.formatted(tableList, schemaText, question);
         try {
             String output = collect(chatModel.chat(prompt));
             if (output == null || output.isBlank()) {
@@ -165,7 +248,7 @@ public class SqlQueryService {
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
-            log.error("生成 SQL 失败：table={}", document.tableName(), e);
+            log.error("生成 SQL 失败：tables={}", schemas.stream().map(SchemaDocument::tableName).toList(), e);
             throw new ApiException(HttpStatus.BAD_GATEWAY, "SQL_GENERATION_FAILED",
                     "生成 SQL 失败，请稍后重试", e);
         }
@@ -225,6 +308,33 @@ public class SqlQueryService {
         }
         List<String> maskedColumns = indexes.stream().map(result.columns()::get).toList();
         return new MaskedResult(maskedRows, maskedColumns);
+    }
+
+    private static Set<String> missingTables(Collection<String> referenced, Collection<String> allowed) {
+        Set<String> allowedLower = allowed.stream()
+                .map(table -> table.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet());
+        LinkedHashSet<String> missing = new LinkedHashSet<>();
+        for (String table : referenced) {
+            if (!allowedLower.contains(table.toLowerCase(Locale.ROOT))) {
+                missing.add(table);
+            }
+        }
+        return missing;
+    }
+
+    private static String findIgnoreCase(Collection<String> candidates, String target) {
+        return candidates.stream()
+                .filter(candidate -> candidate.equalsIgnoreCase(target))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static SchemaDocument findSchema(Map<String, SchemaDocument> schemas, String table) {
+        return schemas.values().stream()
+                .filter(document -> document.tableName().equalsIgnoreCase(table))
+                .findFirst()
+                .orElse(null);
     }
 
     private record MaskedResult(List<List<String>> rows, List<String> maskedColumns) {

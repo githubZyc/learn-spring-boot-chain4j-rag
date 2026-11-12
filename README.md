@@ -127,7 +127,7 @@ npm run build
 - **失败可追踪**：入库失败的文档仍会保留记录，并在列表中展示失败原因，可重新索引；应用重启时残留的 `PENDING`/`PROCESSING` 会自动标记为 `FAILED`，避免卡死。
 - **并发安全**：删除会先取消并等待该文档的后台任务结束，再清理向量和记录；重建索引时会拒绝重复提交。
 - **数据库知识库（找表）**：配置 MySQL 数据源后，同步 `information_schema` 表结构到独立集合 `schema_kb`，用自然语言查找表名。一表一文档，支持表别名、默认时间字段与敏感字段标注；结果会做「主表优先」重排，明细 / 共享 / 备份 / 日志类表自动降权。
-- **数据库知识库（查数）**：自然语言 → 只读 SQL → 执行 → 返回表格。SQL 必须通过单表白名单、禁写、禁注释、强制 200 行与超时校验；敏感字段按列名自动脱敏。
+- **数据库知识库（查数）**：自然语言 → 只读 SQL → 执行 → 返回表格，支持多表 JOIN。SQL 必须通过只读、禁写、禁注释、禁逗号连表、强制 200 行与超时校验；敏感字段按列名自动脱敏。
 
 ## REST API
 
@@ -143,7 +143,7 @@ npm run build
 | `POST` | `/api/schema/sync` | 触发后台同步数据库表结构（202） |
 | `GET` | `/api/schema/status` | 数据库知识库同步状态 |
 | `POST` | `/api/schema/ask` | 自然语言找表 `{question, maxResults?}` |
-| `POST` | `/api/schema/query` | 自然语言查数（NL2SQL）`{question}`，返回 SQL 与结果表格 |
+| `POST` | `/api/schema/query` | 自然语言查数（NL2SQL，支持多表 JOIN）`{question}`，返回 SQL 与结果表格 |
 
 SSE 事件：
 
@@ -187,5 +187,6 @@ curl -s -X POST http://localhost:6333/collections/knowledge_base/points/scroll \
 - 文本文件需为 UTF-8 编码；PDF 仅支持带文字层的版本，扫描件需要 OCR 扩展。
 - 新增文件类型只需实现 `DocumentTextExtractor`，无需改动入库流程（见 `CLAUDE.md` 第 5.1 节）。
 - 单文档知识库、无鉴权、会话记忆仅进程内保存。
-- 数据库知识库的查数仅支持单表查询（安全校验只允许命中表），不支持 JOIN；结果最多 200 行。
+- 数据库知识库的查数支持多表 JOIN：首轮把前 8 张候选表送入模型，模型引用其他表时会按需加载并重试（最多 2 次）；测试环境不做表级权限，只校验表在库中存在；结果最多 200 行。
+- 多表查询的表数量由 `SCHEMA_QUERY_MAX_TABLES` 与 `SCHEMA_QUERY_MAX_EXPANSIONS` 调整。
 - 测试库为 MySQL 5.7，SQL 生成提示词已避免 CTE / 窗口函数；换成 MySQL 8 后可放宽。

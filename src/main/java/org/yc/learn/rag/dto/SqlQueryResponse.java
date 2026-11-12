@@ -9,8 +9,7 @@ import java.util.List;
  */
 public record SqlQueryResponse(
         String question,
-        String tableName,
-        String tableComment,
+        List<SqlTableRefDto> tables,
         String sql,
         List<String> columns,
         List<List<String>> rows,
@@ -19,6 +18,7 @@ public record SqlQueryResponse(
         List<String> maskedColumns) {
 
     public SqlQueryResponse {
+        tables = tables == null ? List.of() : List.copyOf(tables);
         columns = columns == null ? List.of() : List.copyOf(columns);
         rows = rows == null ? List.of() : rows;
         maskedColumns = maskedColumns == null ? List.of() : List.copyOf(maskedColumns);

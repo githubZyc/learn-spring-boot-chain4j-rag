@@ -176,7 +176,7 @@ PENDING → PROCESSING → READY
 - Schema 知识库使用独立集合 `schema_kb`，与文档知识库隔离。
 - 中文表别名放 UTF-8 文件（默认 `data/schema-aliases.properties`），不要放 `.env`：properties 会按 Latin-1 解码导致乱码。
 - 敏感字段与默认时间字段的推断是默认规则，必须允许按表配置覆盖；推断不出时反问用户。
-- NL2SQL 生成的 SQL 必须经过 `SqlValidator`：只允许单表、只读、无注释、强制 `LIMIT 200`；校验失败不得降级执行。
+- NL2SQL 生成的 SQL 必须经过 `SqlValidator`：只读、无注释、无逗号连表、强制 `LIMIT 200`；允许多表 JOIN。测试环境不做表级权限，但必须校验引用表在库中存在；校验失败不得降级执行。
 - 查询结果只对 `sensitiveColumns` 标注的列脱敏，不得把原始敏感值写进日志。
 
 ## 6. 测试规范

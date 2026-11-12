@@ -65,10 +65,14 @@ export interface SchemaAskResponse {
   matches: SchemaTableMatch[]
 }
 
-export interface SqlQueryResult {
-  question: string
+export interface SqlTableRef {
   tableName: string
   tableComment: string
+}
+
+export interface SqlQueryResult {
+  question: string
+  tables: SqlTableRef[]
   sql: string
   columns: string[]
   rows: (string | null)[][]

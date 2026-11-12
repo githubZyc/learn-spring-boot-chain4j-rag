@@ -15,9 +15,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -47,17 +51,63 @@ public class MySqlSchemaExtractor {
      * 只提取一张表的结构，供 NL2SQL 在查询时获取最新字段信息。
      */
     public SchemaDocument extractTable(ConnectorConfig config, String tableName) {
-        if (tableName == null || !TABLE_NAME_PATTERN.matcher(tableName).matches()) {
-            throw new IllegalArgumentException("非法表名：" + tableName);
-        }
-        List<SchemaDocument> documents = extract(config, tableName);
+        List<SchemaDocument> documents = extractTables(config, Set.of(tableName));
         if (documents.isEmpty()) {
             throw new IllegalArgumentException("表不存在或未授权：" + tableName);
         }
         return documents.get(0);
     }
 
-    private List<SchemaDocument> extract(ConnectorConfig config, String tableFilter) {
+    /**
+     * 批量提取多张表的结构；NL2SQL 需要做多表关联时使用。
+     */
+    public List<SchemaDocument> extractTables(ConnectorConfig config, Collection<String> tableNames) {
+        if (tableNames == null || tableNames.isEmpty()) {
+            throw new IllegalArgumentException("至少需要指定一张表");
+        }
+        List<String> validated = new ArrayList<>(tableNames.size());
+        for (String tableName : tableNames) {
+            validateTableName(tableName);
+            validated.add(tableName);
+        }
+        return extract(config, validated);
+    }
+
+    /**
+     * 列出当前库中所有业务表，供 NL2SQL 校验模型引用的表是否存在。
+     */
+    public Set<String> listTableNames(ConnectorConfig config) {
+        SchemaExtractOptions options = SchemaExtractOptions.from(config);
+        String sql = """
+                SELECT TABLE_NAME
+                FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
+                ORDER BY TABLE_NAME""";
+        try (Connection connection = MySqlJdbc.open(
+                config.require("url"), config.require("username"), config.get("password"));
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, options.database());
+            statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+            try (ResultSet rs = statement.executeQuery()) {
+                Set<String> names = new LinkedHashSet<>();
+                while (rs.next()) {
+                    names.add(rs.getString("TABLE_NAME"));
+                }
+                return names;
+            }
+        } catch (SQLException e) {
+            log.error("读取表清单失败：database={}", options.database(), e);
+            throw new IllegalStateException("读取表清单失败：" + MySqlJdbc.rootMessage(e), e);
+        }
+    }
+
+    private static void validateTableName(String tableName) {
+        if (tableName == null || !TABLE_NAME_PATTERN.matcher(tableName).matches()) {
+            throw new IllegalArgumentException("非法表名：" + tableName);
+        }
+    }
+
+    private List<SchemaDocument> extract(ConnectorConfig config, Collection<String> tableFilter) {
         SchemaExtractOptions options = SchemaExtractOptions.from(config);
         try (Connection connection = MySqlJdbc.open(
                 config.require("url"), config.require("username"), config.get("password"))) {
@@ -92,20 +142,19 @@ public class MySqlSchemaExtractor {
     }
 
     private static Map<String, TableMeta> loadTables(Connection connection, SchemaExtractOptions options,
-                                                     String tableFilter) throws SQLException {
+                                                     Collection<String> tableFilter) throws SQLException {
+        Collection<String> filter = normalizeFilter(tableFilter);
         StringBuilder sql = new StringBuilder("""
                 SELECT TABLE_NAME, TABLE_COMMENT
                 FROM information_schema.TABLES
                 WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'""");
-        if (tableFilter != null) {
-            sql.append(" AND TABLE_NAME = ?");
+        if (filter != null) {
+            sql.append(" AND TABLE_NAME IN (").append(placeholders(filter.size())).append(")");
         }
         sql.append(" ORDER BY TABLE_NAME");
         try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
             statement.setString(1, options.database());
-            if (tableFilter != null) {
-                statement.setString(2, tableFilter);
-            }
+            bindTableFilter(statement, 2, filter);
             statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
             try (ResultSet rs = statement.executeQuery()) {
                 Map<String, TableMeta> tables = new LinkedHashMap<>();
@@ -122,21 +171,20 @@ public class MySqlSchemaExtractor {
     }
 
     private static Map<String, List<SchemaColumn>> loadColumns(Connection connection, SchemaExtractOptions options,
-                                                               String tableFilter) throws SQLException {
+                                                               Collection<String> tableFilter) throws SQLException {
+        Collection<String> filter = normalizeFilter(tableFilter);
         StringBuilder sql = new StringBuilder("""
                 SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE,
                        COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT
                 FROM information_schema.COLUMNS
                 WHERE TABLE_SCHEMA = ?""");
-        if (tableFilter != null) {
-            sql.append(" AND TABLE_NAME = ?");
+        if (filter != null) {
+            sql.append(" AND TABLE_NAME IN (").append(placeholders(filter.size())).append(")");
         }
         sql.append(" ORDER BY TABLE_NAME, ORDINAL_POSITION");
         try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
             statement.setString(1, options.database());
-            if (tableFilter != null) {
-                statement.setString(2, tableFilter);
-            }
+            bindTableFilter(statement, 2, filter);
             statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
             try (ResultSet rs = statement.executeQuery()) {
                 Map<String, List<SchemaColumn>> byTable = new LinkedHashMap<>();
@@ -156,20 +204,19 @@ public class MySqlSchemaExtractor {
     }
 
     private static Map<String, List<SchemaIndex>> loadIndexes(Connection connection, SchemaExtractOptions options,
-                                                              String tableFilter) throws SQLException {
+                                                              Collection<String> tableFilter) throws SQLException {
+        Collection<String> filter = normalizeFilter(tableFilter);
         StringBuilder sql = new StringBuilder("""
                 SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE
                 FROM information_schema.STATISTICS
                 WHERE TABLE_SCHEMA = ?""");
-        if (tableFilter != null) {
-            sql.append(" AND TABLE_NAME = ?");
+        if (filter != null) {
+            sql.append(" AND TABLE_NAME IN (").append(placeholders(filter.size())).append(")");
         }
         sql.append(" ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX");
         try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
             statement.setString(1, options.database());
-            if (tableFilter != null) {
-                statement.setString(2, tableFilter);
-            }
+            bindTableFilter(statement, 2, filter);
             statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
             try (ResultSet rs = statement.executeQuery()) {
                 Map<String, LinkedHashMap<String, IndexBuilder>> grouped = new LinkedHashMap<>();
@@ -191,6 +238,25 @@ public class MySqlSchemaExtractor {
                         indexes.values().stream().map(IndexBuilder::toSchemaIndex).toList()));
                 return byTable;
             }
+        }
+    }
+
+    private static Collection<String> normalizeFilter(Collection<String> tableFilter) {
+        return tableFilter == null || tableFilter.isEmpty() ? null : tableFilter;
+    }
+
+    private static String placeholders(int count) {
+        return String.join(", ", Collections.nCopies(count, "?"));
+    }
+
+    private static void bindTableFilter(PreparedStatement statement, int startIndex,
+                                        Collection<String> tableFilter) throws SQLException {
+        if (tableFilter == null) {
+            return;
+        }
+        int index = startIndex;
+        for (String table : tableFilter) {
+            statement.setString(index++, table);
         }
     }
 

@@ -74,6 +74,10 @@ app:
     collection: ${SCHEMA_QDRANT_COLLECTION:schema_kb}
     max-results: ${SCHEMA_MAX_RESULTS:5}
     min-score: ${SCHEMA_MIN_SCORE:0.35}
+    query:
+      # 首轮送入模型的候选表数量；多表关联时模型还可按需扩展
+      max-tables: ${SCHEMA_QUERY_MAX_TABLES:8}
+      max-expansions: ${SCHEMA_QUERY_MAX_EXPANSIONS:2}
     datasource:
       url: ${SCHEMA_DB_URL:}
       username: ${SCHEMA_DB_USERNAME:}
