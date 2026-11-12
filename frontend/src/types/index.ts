@@ -35,3 +35,30 @@ export interface ApiErrorBody {
   message: string
   path: string
 }
+
+export type SchemaSyncStatus = 'IDLE' | 'RUNNING' | 'READY' | 'FAILED'
+
+export interface SchemaStatus {
+  configured: boolean
+  database: string | null
+  collection: string
+  status: SchemaSyncStatus
+  tableCount: number
+  error: string | null
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export interface SchemaTableMatch {
+  tableName: string
+  tableComment: string
+  defaultTimeColumn: string
+  sensitiveColumns: string[]
+  score: number
+  snippet: string
+}
+
+export interface SchemaAskResponse {
+  question: string
+  matches: SchemaTableMatch[]
+}

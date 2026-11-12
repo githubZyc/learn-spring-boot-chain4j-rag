@@ -69,6 +69,23 @@ app:
     embedding-batch-size: ${RAG_EMBEDDING_BATCH_SIZE:10}
   memory:
     max-messages: ${CHAT_MEMORY_MAX_MESSAGES:20}
+  schema:
+    # 数据库知识库独立集合，避免表结构文档污染文档检索
+    collection: ${SCHEMA_QDRANT_COLLECTION:schema_kb}
+    max-results: ${SCHEMA_MAX_RESULTS:5}
+    min-score: ${SCHEMA_MIN_SCORE:0.35}
+    datasource:
+      url: ${SCHEMA_DB_URL:}
+      username: ${SCHEMA_DB_USERNAME:}
+      password: ${SCHEMA_DB_PASSWORD:}
+      database: ${SCHEMA_DB_DATABASE:}
+      default-time-column: ${SCHEMA_DB_DEFAULT_TIME_COLUMN:}
+      table-whitelist: ${SCHEMA_DB_TABLE_WHITELIST:}
+      extra-sensitive-columns: ${SCHEMA_DB_EXTRA_SENSITIVE_COLUMNS:}
+      # 表别名用于给没有中文注释的表补充业务名称，格式：表名=别名,表名=别名
+      table-aliases: ${SCHEMA_DB_TABLE_ALIASES:}
+      # 中文别名建议放在独立 UTF-8 文件（每行 表名=别名），避免 .env 的 Latin-1 解码问题
+      table-aliases-file: ${SCHEMA_DB_TABLE_ALIASES_FILE:./data/schema-aliases.properties}
 
 logging:
   level:

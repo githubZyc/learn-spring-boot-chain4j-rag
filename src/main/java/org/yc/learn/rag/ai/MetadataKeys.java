@@ -16,6 +16,21 @@ public final class MetadataKeys {
     /** 切分器自动写入的 chunk 序号 */
     public static final String INDEX = "index";
 
+    /** 知识类型：document / schema */
+    public static final String SOURCE_TYPE = "sourceType";
+    /** Schema 知识库的 sourceType 取值 */
+    public static final String SOURCE_SCHEMA = "schema";
+    /** Schema 所属数据库 */
+    public static final String SCHEMA_DATABASE = "schemaDatabase";
+    /** 表名 */
+    public static final String TABLE_NAME = "tableName";
+    /** 表中文名 / 注释 / 业务别名 */
+    public static final String TABLE_COMMENT = "tableComment";
+    /** 默认时间字段 */
+    public static final String DEFAULT_TIME_COLUMN = "defaultTimeColumn";
+    /** 敏感字段，逗号分隔 */
+    public static final String SENSITIVE_COLUMNS = "sensitiveColumns";
+
     private MetadataKeys() {
     }
 }

@@ -26,4 +26,10 @@ public class AsyncConfig {
     public ManagedVirtualThreadExecutor ingestionExecutor() {
         return new ManagedVirtualThreadExecutor("ingestion", Duration.ofSeconds(10));
     }
+
+    /** Schema 同步独立执行器，避免大库元数据同步阻塞文档入库 */
+    @Bean(destroyMethod = "shutdown")
+    public ManagedVirtualThreadExecutor schemaExecutor() {
+        return new ManagedVirtualThreadExecutor("schema", Duration.ofSeconds(10));
+    }
 }

@@ -79,6 +79,19 @@ DASHSCOPE_EMBEDDING_DIMENSION=1024
 
 > 向量维度必须与 Qdrant 集合一致（默认 1024 / Cosine）。集合会在启动时自动创建；如果已有集合维度不同，应用会启动失败并提示删除集合。
 
+### 数据库知识库配置（可选）
+
+在 `.env` 中配置测试库连接，重启后会创建独立集合 `schema_kb`：
+
+```properties
+SCHEMA_DB_URL=jdbc:mysql://127.0.0.1:3306/your_database?useSSL=false&serverTimezone=Asia/Shanghai
+SCHEMA_DB_USERNAME=readonly_user
+SCHEMA_DB_PASSWORD=change_me
+SCHEMA_DB_DATABASE=your_database
+```
+
+中文表别名放在 UTF-8 文件 `data/schema-aliases.properties`（每行 `表名=别名`），不要直接写进 `.env`，否则会按 Latin-1 解码成乱码。
+
 ### 3. 启动后端
 
 ```bash
@@ -113,6 +126,7 @@ npm run build
 - **会话记忆**：按 `conversationId` 隔离，`MessageWindowChatMemory` 保留最近 20 条；“新会话”会清理后端记忆。
 - **失败可追踪**：入库失败的文档仍会保留记录，并在列表中展示失败原因，可重新索引；应用重启时残留的 `PENDING`/`PROCESSING` 会自动标记为 `FAILED`，避免卡死。
 - **并发安全**：删除会先取消并等待该文档的后台任务结束，再清理向量和记录；重建索引时会拒绝重复提交。
+- **数据库知识库**：配置 MySQL 数据源后，同步 `information_schema` 表结构到独立集合 `schema_kb`，用自然语言查找表名。一表一文档，支持表别名、默认时间字段与敏感字段标注。
 
 ## REST API
 
@@ -125,6 +139,9 @@ npm run build
 | `POST` | `/api/documents/{id}/reindex` | 重建索引 |
 | `POST` | `/api/chat/stream` | SSE 流式问答 `{conversationId, message}` |
 | `DELETE` | `/api/chat/{conversationId}` | 清理会话记忆 |
+| `POST` | `/api/schema/sync` | 触发后台同步数据库表结构（202） |
+| `GET` | `/api/schema/status` | 数据库知识库同步状态 |
+| `POST` | `/api/schema/ask` | 自然语言找表 `{question, maxResults?}` |
 
 SSE 事件：
 
@@ -167,4 +184,5 @@ curl -s -X POST http://localhost:6333/collections/knowledge_base/points/scroll \
 
 - 文本文件需为 UTF-8 编码；PDF 仅支持带文字层的版本，扫描件需要 OCR 扩展。
 - 新增文件类型只需实现 `DocumentTextExtractor`，无需改动入库流程（见 `CLAUDE.md` 第 5.1 节）。
-- 单知识库（单 Qdrant collection）、无鉴权、会话记忆仅进程内保存。
+- 单文档知识库、无鉴权、会话记忆仅进程内保存。
+- 数据库知识库目前只实现「找表（Schema RAG）」；「查数（NL2SQL）」尚未实现。
