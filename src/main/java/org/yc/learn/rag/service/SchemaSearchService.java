@@ -25,6 +25,9 @@ import java.util.List;
 public class SchemaSearchService {
 
     private static final int MAX_RESULTS_LIMIT = 20;
+    private static final int CANDIDATE_MULTIPLIER = 4;
+    private static final int MIN_CANDIDATES = 20;
+    private static final int MAX_CANDIDATES = 50;
 
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> schemaEmbeddingStore;
@@ -45,17 +48,22 @@ public class SchemaSearchService {
                 ? defaultResults
                 : Math.max(1, Math.min(maxResults, MAX_RESULTS_LIMIT));
 
+        // 多取一些候选再重排，避免主表被同族明细表挤出前 N
+        int candidateCount = Math.min(MAX_CANDIDATES,
+                Math.max(MIN_CANDIDATES, limit * CANDIDATE_MULTIPLIER));
+
         Embedding queryEmbedding = embeddingModel.embed(question).content();
         EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
                 .queryEmbedding(queryEmbedding)
-                .maxResults(limit)
+                .maxResults(candidateCount)
                 .minScore(minScore)
                 .filter(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE_TYPE)
                         .isEqualTo(MetadataKeys.SOURCE_SCHEMA))
                 .build();
 
-        return schemaEmbeddingStore.search(request).matches().stream()
+        List<SchemaMatchDto> candidates = schemaEmbeddingStore.search(request).matches().stream()
                 .map(SchemaMatchDto::from)
                 .toList();
+        return SchemaReranker.rerank(question, candidates, limit);
     }
 }

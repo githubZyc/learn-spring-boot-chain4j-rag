@@ -1,25 +1,28 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { SchemaStatus, SchemaTableMatch } from '../types'
+import type { SchemaStatus, SchemaTableMatch, SqlQueryResult } from '../types'
 
 const props = defineProps<{
   status: SchemaStatus | null
   matches: SchemaTableMatch[]
+  queryResult: SqlQueryResult | null
   asking: boolean
+  querying: boolean
 }>()
 
 const emit = defineEmits<{
   sync: []
   ask: [question: string]
+  query: [question: string]
 }>()
 
+const mode = ref<'ask' | 'query'>('ask')
 const question = ref('')
-const samples = [
-  '电子病历数据存在哪个表？',
-  '客户信息存在哪个表？',
-  '订单数据存在哪个表？'
-]
+
+const askSamples = ['电子病历数据存在哪个表？', '客户信息存在哪个表？', '订单数据存在哪个表？']
+const querySamples = ['e__dzbl 里今天生成的数据有哪些？', '电子病历最近 7 天有多少条？']
+const samples = computed(() => (mode.value === 'ask' ? askSamples : querySamples))
 
 const tagType = computed<'success' | 'warning' | 'danger' | 'info'>(() => {
   switch (props.status?.status) {
@@ -34,18 +37,36 @@ const tagType = computed<'success' | 'warning' | 'danger' | 'info'>(() => {
   }
 })
 
-function handleAsk() {
+const rowObjects = computed(() => {
+  const result = props.queryResult
+  if (!result) {
+    return []
+  }
+  return result.rows.map((row) =>
+    Object.fromEntries(result.columns.map((column, index) => [column, row[index] ?? '']))
+  )
+})
+
+function handleSubmit() {
   const value = question.value.trim()
   if (!value) {
     ElMessage.warning('请输入问题')
     return
   }
-  emit('ask', value)
+  if (mode.value === 'ask') {
+    emit('ask', value)
+  } else {
+    emit('query', value)
+  }
 }
 
 function askSample(sample: string) {
   question.value = sample
-  emit('ask', sample)
+  if (mode.value === 'ask') {
+    emit('ask', sample)
+  } else {
+    emit('query', sample)
+  }
 }
 </script>
 
@@ -55,7 +76,7 @@ function askSample(sample: string) {
       <div class="schema-head">
         <div>
           <h2>数据库知识库</h2>
-          <p class="hint">同步 MySQL 表结构后，用自然语言查找表名</p>
+          <p class="hint">先同步 MySQL 表结构，再「找表」或「查数」</p>
         </div>
         <el-button
           type="primary"
@@ -84,14 +105,30 @@ function askSample(sample: string) {
     </div>
 
     <div class="pane-card grow">
+      <div class="mode-row">
+        <el-radio-group v-model="mode" size="small">
+          <el-radio-button value="ask">找表</el-radio-button>
+          <el-radio-button value="query">查数</el-radio-button>
+        </el-radio-group>
+        <span class="hint">
+          {{ mode === 'ask' ? '自然语言定位表名与字段' : '生成只读 SQL 并返回数据' }}
+        </span>
+      </div>
+
       <div class="ask-row">
         <el-input
           v-model="question"
-          placeholder="例如：电子病历数据存在哪个表？"
+          :placeholder="
+            mode === 'ask'
+              ? '例如：电子病历数据存在哪个表？'
+              : '例如：e__dzbl 里今天生成的数据有哪些？'
+          "
           clearable
-          @keyup.enter="handleAsk"
+          @keyup.enter="handleSubmit"
         />
-        <el-button type="primary" :loading="asking" @click="handleAsk">查找</el-button>
+        <el-button type="primary" :loading="asking || querying" @click="handleSubmit">
+          {{ mode === 'ask' ? '查找' : '查询' }}
+        </el-button>
       </div>
 
       <div class="samples">
@@ -106,12 +143,15 @@ function askSample(sample: string) {
         </el-tag>
       </div>
 
-      <div v-if="matches.length" class="matches">
+      <div v-if="mode === 'ask' && matches.length" class="matches">
         <el-card v-for="match in matches" :key="match.tableName" shadow="never" class="match">
           <div class="match-head">
             <div>
               <strong>{{ match.tableName }}</strong>
               <span v-if="match.tableComment" class="comment">{{ match.tableComment }}</span>
+              <el-tag v-if="match.rankReason" size="small" type="info" class="reason">
+                {{ match.rankReason }}
+              </el-tag>
             </div>
             <el-tag size="small" type="success">{{ (match.score * 100).toFixed(1) }}%</el-tag>
           </div>
@@ -124,7 +164,41 @@ function askSample(sample: string) {
           <pre class="snippet">{{ match.snippet }}</pre>
         </el-card>
       </div>
-      <el-empty v-else-if="!asking" description="输入问题，看看哪张表最匹配" />
+
+      <div v-else-if="mode === 'query' && queryResult" class="query-result">
+        <div class="query-head">
+          <div>
+            <strong>{{ queryResult.tableName }}</strong>
+            <span v-if="queryResult.tableComment" class="comment">
+              {{ queryResult.tableComment }}
+            </span>
+          </div>
+          <span class="query-meta">
+            返回 {{ queryResult.rowCount }} 行 · {{ queryResult.costMs }}ms
+          </span>
+        </div>
+        <div v-if="queryResult.maskedColumns.length" class="masked">
+          <el-tag type="warning" size="small">
+            已脱敏：{{ queryResult.maskedColumns.join('、') }}
+          </el-tag>
+        </div>
+        <pre class="sql">{{ queryResult.sql }}</pre>
+        <el-table :data="rowObjects" border size="small" max-height="420">
+          <el-table-column
+            v-for="column in queryResult.columns"
+            :key="column"
+            :prop="column"
+            :label="column"
+            min-width="120"
+            show-overflow-tooltip
+          />
+        </el-table>
+      </div>
+
+      <el-empty
+        v-else-if="!asking && !querying"
+        :description="mode === 'ask' ? '输入问题，看看哪张表最匹配' : '输入问题，生成 SQL 并查询数据'"
+      />
     </div>
   </div>
 </template>
@@ -183,6 +257,13 @@ function askSample(sample: string) {
   color: #f56c6c;
 }
 
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .ask-row {
   display: flex;
   gap: 8px;
@@ -218,6 +299,10 @@ function askSample(sample: string) {
   color: #606266;
 }
 
+.reason {
+  margin-left: 8px;
+}
+
 .match-meta {
   display: flex;
   flex-wrap: wrap;
@@ -237,6 +322,38 @@ function askSample(sample: string) {
   color: #606266;
   font-size: 12px;
   line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.query-result {
+  margin-top: 12px;
+}
+
+.query-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.query-meta {
+  color: #909399;
+  font-size: 12px;
+}
+
+.masked {
+  margin-top: 8px;
+}
+
+.sql {
+  margin: 10px 0;
+  padding: 10px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  color: #303133;
+  font-size: 12px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }

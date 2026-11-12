@@ -31,6 +31,14 @@ class SensitiveColumnDetectorTest {
     }
 
     @Test
+    void detectsChinesePinyinColumnNames() {
+        assertThat(SensitiveColumnDetector.isSensitive("c__xingming", Set.of())).isTrue();
+        assertThat(SensitiveColumnDetector.isSensitive("c__lianxidianhua", Set.of())).isTrue();
+        assertThat(SensitiveColumnDetector.isSensitive("c__juzhudi", Set.of())).isTrue();
+        assertThat(SensitiveColumnDetector.isSensitive("c__zhenduan", Set.of())).isTrue();
+    }
+
+    @Test
     void doesNotFlagOrdinaryBusinessColumns() {
         assertThat(SensitiveColumnDetector.isSensitive("dept_name", Set.of())).isFalse();
         assertThat(SensitiveColumnDetector.isSensitive("company_name", Set.of())).isFalse();

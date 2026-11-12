@@ -14,20 +14,13 @@ import org.springframework.stereotype.Service;
 import org.yc.learn.rag.ai.MetadataKeys;
 import org.yc.learn.rag.config.AppProperties;
 import org.yc.learn.rag.config.ManagedVirtualThreadExecutor;
-import org.yc.learn.rag.connector.ConnectorConfig;
 import org.yc.learn.rag.connector.SchemaDocument;
 import org.yc.learn.rag.connector.mysql.MySqlSchemaExtractor;
-import org.yc.learn.rag.connector.mysql.SchemaExtractOptions;
 import org.yc.learn.rag.dto.SchemaStatusDto;
 import org.yc.learn.rag.exception.ApiException;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -76,8 +69,8 @@ public class SchemaIndexService {
         if (schema == null) {
             return new SchemaStatusDto(false, null, "schema_kb", "IDLE", 0, null, null, null);
         }
-        boolean configured = configured(schema);
-        String database = configured ? safeDatabase(schema.datasource()) : null;
+        boolean configured = SchemaDatasourceSupport.configured(schema);
+        String database = configured ? SchemaDatasourceSupport.database(schema.datasource()) : null;
         Progress current = progress.get();
         return new SchemaStatusDto(
                 configured,
@@ -95,7 +88,7 @@ public class SchemaIndexService {
      */
     public SchemaStatusDto submitSync() {
         AppProperties.Schema schema = properties.schema();
-        if (!configured(schema)) {
+        if (!SchemaDatasourceSupport.configured(schema)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "SCHEMA_DATASOURCE_NOT_CONFIGURED",
                     "未配置数据库连接，请设置 SCHEMA_DB_URL / SCHEMA_DB_USERNAME / SCHEMA_DB_PASSWORD");
         }
@@ -103,7 +96,7 @@ public class SchemaIndexService {
             return status();
         }
 
-        String database = safeDatabase(schema.datasource());
+        String database = SchemaDatasourceSupport.database(schema.datasource());
         Instant startedAt = Instant.now();
         progress.set(new Progress("RUNNING", 0, null, startedAt, null));
 
@@ -123,7 +116,8 @@ public class SchemaIndexService {
     }
 
     private int sync(AppProperties.SchemaDataSource datasource) {
-        List<SchemaDocument> documents = schemaExtractor.extract(connectorConfig(datasource));
+        List<SchemaDocument> documents = schemaExtractor.extract(
+                SchemaDatasourceSupport.connectorConfig(datasource));
 
         // 全量重建：先清空 schema 集合，已删除的表不会残留
         schemaEmbeddingStore.removeAll(MetadataFilterBuilder
@@ -160,79 +154,6 @@ public class SchemaIndexService {
     private static String pointId(SchemaDocument document) {
         String key = "schema:" + document.database() + ":" + document.tableName();
         return UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
-    }
-
-    private static ConnectorConfig connectorConfig(AppProperties.SchemaDataSource datasource) {
-        Map<String, String> props = new HashMap<>();
-        putIfNotBlank(props, "url", datasource.url());
-        putIfNotBlank(props, "username", datasource.username());
-        putIfNotBlank(props, "password", datasource.password());
-        putIfNotBlank(props, "database", datasource.database());
-        putIfNotBlank(props, "defaultTimeColumn", datasource.defaultTimeColumn());
-        putIfNotBlank(props, "tableWhitelist", datasource.tableWhitelist());
-        putIfNotBlank(props, "extraSensitiveColumns", datasource.extraSensitiveColumns());
-        // 别名文件优先：它保证 UTF-8 正确解码；文件不存在时再退回环境变量
-        String aliases = readAliasesFile(datasource.tableAliasesFile());
-        if (isBlank(aliases)) {
-            aliases = datasource.tableAliases();
-        }
-        putIfNotBlank(props, "tableAliases", aliases);
-        return new ConnectorConfig(props);
-    }
-
-    private static boolean configured(AppProperties.Schema schema) {
-        return schema != null
-                && schema.datasource() != null
-                && !isBlank(schema.datasource().url())
-                && !isBlank(schema.datasource().username());
-    }
-
-    private static String safeDatabase(AppProperties.SchemaDataSource datasource) {
-        if (!isBlank(datasource.database())) {
-            return datasource.database().trim();
-        }
-        try {
-            return SchemaExtractOptions.parseDatabase(datasource.url());
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
-    }
-
-    /**
-     * 从 UTF-8 文件读取表别名，每行 {@code 表名=别名}，忽略空行与 # 注释。
-     * <p>
-     * 单独走文件而不是 .env，是因为 .env 按 properties 解析时中文会被当成 Latin-1。
-     */
-    private static String readAliasesFile(String path) {
-        if (isBlank(path)) {
-            return null;
-        }
-        Path file = Path.of(path);
-        if (!Files.exists(file)) {
-            return null;
-        }
-        try {
-            List<String> entries = new ArrayList<>();
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                String trimmed = line.trim();
-                if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
-                    entries.add(trimmed);
-                }
-            }
-            return entries.isEmpty() ? null : String.join(",", entries);
-        } catch (IOException e) {
-            throw new IllegalStateException("读取表别名文件失败：" + path, e);
-        }
-    }
-
-    private static void putIfNotBlank(Map<String, String> target, String key, String value) {
-        if (!isBlank(value)) {
-            target.put(key, value);
-        }
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isBlank();
     }
 
     private static String rootMessage(Throwable throwable) {

@@ -55,10 +55,24 @@ export interface SchemaTableMatch {
   defaultTimeColumn: string
   sensitiveColumns: string[]
   score: number
+  vectorScore: number
+  rankReason: string
   snippet: string
 }
 
 export interface SchemaAskResponse {
   question: string
   matches: SchemaTableMatch[]
+}
+
+export interface SqlQueryResult {
+  question: string
+  tableName: string
+  tableComment: string
+  sql: string
+  columns: string[]
+  rows: (string | null)[][]
+  rowCount: number
+  costMs: number
+  maskedColumns: string[]
 }

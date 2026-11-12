@@ -23,11 +23,13 @@ public final class SensitiveColumnDetector {
             "phone", "phoneno", "mobile", "mobilephone", "tel", "telephone",
             "address", "homeaddress", "email",
             "diagnosis", "disease",
-            // 国内 HIS 常见拼音缩写
-            "xm", "sfzh", "sjh");
+            // 国内 HIS 常见拼音命名
+            "xm", "xingming", "sfzh", "shenfenzheng", "sjh", "shoujihao",
+            "lianxidianhua", "dianhua", "juzhudi", "dizhi", "zhenduan");
 
     private static final List<String> SUFFIXES = List.of(
-            "idcard", "idnumber", "phone", "mobile", "email", "address", "diagnosis");
+            "idcard", "idnumber", "phone", "mobile", "email", "address", "diagnosis",
+            "xingming", "shenfenzheng", "lianxidianhua", "juzhudi", "zhenduan");
 
     private SensitiveColumnDetector() {
     }

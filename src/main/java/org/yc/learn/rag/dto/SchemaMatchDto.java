@@ -19,19 +19,39 @@ public record SchemaMatchDto(
         String defaultTimeColumn,
         List<String> sensitiveColumns,
         double score,
+        double vectorScore,
+        String rankReason,
         String snippet) {
 
     private static final int SNIPPET_MAX_LENGTH = 400;
 
     public static SchemaMatchDto from(EmbeddingMatch<TextSegment> match) {
         Metadata metadata = match.embedded().metadata();
+        double rawScore = match.score() == null ? 0 : match.score();
         return new SchemaMatchDto(
                 nullToEmpty(metadata.getString(MetadataKeys.TABLE_NAME)),
                 nullToEmpty(metadata.getString(MetadataKeys.TABLE_COMMENT)),
                 nullToEmpty(metadata.getString(MetadataKeys.DEFAULT_TIME_COLUMN)),
                 splitCsv(metadata.getString(MetadataKeys.SENSITIVE_COLUMNS)),
-                match.score() == null ? 0 : match.score(),
+                rawScore,
+                rawScore,
+                "",
                 snippet(match.embedded().text()));
+    }
+
+    /**
+     * 生成 rerank 后的新对象：保留原始向量分，写入综合分与排序原因。
+     */
+    public SchemaMatchDto withRank(double rankedScore, String reason) {
+        return new SchemaMatchDto(
+                tableName,
+                tableComment,
+                defaultTimeColumn,
+                sensitiveColumns,
+                rankedScore,
+                vectorScore,
+                reason == null ? "" : reason,
+                snippet);
     }
 
     private static List<String> splitCsv(String raw) {

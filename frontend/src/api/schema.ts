@@ -1,4 +1,4 @@
-import type { SchemaAskResponse, SchemaStatus } from '../types'
+import type { SchemaAskResponse, SchemaStatus, SqlQueryResult } from '../types'
 import { request } from './http'
 
 export function getSchemaStatus(): Promise<SchemaStatus> {
@@ -11,6 +11,14 @@ export function syncSchema(): Promise<SchemaStatus> {
 
 export function askSchema(question: string): Promise<SchemaAskResponse> {
   return request<SchemaAskResponse>('/api/schema/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question })
+  })
+}
+
+export function querySchema(question: string): Promise<SqlQueryResult> {
+  return request<SqlQueryResult>('/api/schema/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question })

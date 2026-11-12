@@ -1,13 +1,15 @@
 import { onBeforeUnmount, ref } from 'vue'
-import type { SchemaStatus, SchemaTableMatch } from '../types'
-import { askSchema, getSchemaStatus, syncSchema } from '../api/schema'
+import type { SchemaStatus, SchemaTableMatch, SqlQueryResult } from '../types'
+import { askSchema, getSchemaStatus, querySchema, syncSchema } from '../api/schema'
 
 const POLL_INTERVAL_MS = 2000
 
 export function useSchema() {
   const status = ref<SchemaStatus | null>(null)
   const matches = ref<SchemaTableMatch[]>([])
+  const queryResult = ref<SqlQueryResult | null>(null)
   const asking = ref(false)
+  const querying = ref(false)
   let pollTimer: number | null = null
 
   function stopPolling() {
@@ -52,7 +54,26 @@ export function useSchema() {
     }
   }
 
+  async function query(question: string) {
+    querying.value = true
+    try {
+      queryResult.value = await querySchema(question)
+    } finally {
+      querying.value = false
+    }
+  }
+
   onBeforeUnmount(stopPolling)
 
-  return { status, matches, asking, loadStatus, startSync, ask }
+  return {
+    status,
+    matches,
+    queryResult,
+    asking,
+    querying,
+    loadStatus,
+    startSync,
+    ask,
+    query
+  }
 }

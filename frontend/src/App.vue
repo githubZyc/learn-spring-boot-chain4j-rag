@@ -14,10 +14,13 @@ const { messages, streaming, error, send, stop, newConversation } = useChat()
 const {
   status: schemaStatus,
   matches: schemaMatches,
+  queryResult: schemaQueryResult,
   asking: schemaAsking,
+  querying: schemaQuerying,
   loadStatus: loadSchemaStatus,
   startSync: startSchemaSync,
-  ask: askSchema
+  ask: askSchema,
+  query: querySchemaData
 } = useSchema()
 
 const activeTab = ref<'docs' | 'chat' | 'schema'>('docs')
@@ -78,6 +81,14 @@ async function handleSchemaAsk(question: string) {
     ElMessage.error(e instanceof Error ? e.message : '查找失败')
   }
 }
+
+async function handleSchemaQuery(question: string) {
+  try {
+    await querySchemaData(question)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '查询失败')
+  }
+}
 </script>
 
 <template>
@@ -135,9 +146,12 @@ async function handleSchemaAsk(question: string) {
         <SchemaPanel
           :status="schemaStatus"
           :matches="schemaMatches"
+          :query-result="schemaQueryResult"
           :asking="schemaAsking"
+          :querying="schemaQuerying"
           @sync="handleSchemaSync"
           @ask="handleSchemaAsk"
+          @query="handleSchemaQuery"
         />
       </section>
     </main>
