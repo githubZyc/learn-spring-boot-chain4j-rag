@@ -15,7 +15,8 @@ public record AppProperties(
         Qdrant qdrant,
         Rag rag,
         Memory memory,
-        Schema schema) {
+        Schema schema,
+        Qc qc) {
 
     public record Sse(long timeoutMs) {
     }
@@ -58,5 +59,25 @@ public record AppProperties(
             String extraSensitiveColumns,
             String tableAliases,
             String tableAliasesFile) {
+    }
+
+    /**
+     * 手术质控助手配置。
+     *
+     * @param scanDays            默认扫描最近多少天
+     * @param archiveDays         归档超时阈值（天）
+     * @param anesthesiaMaxMin    麻醉时长告警阈值（分钟）
+     * @param countDiffRatio      取发/种植数量差异告警阈值（比例）
+     * @param allowedTables       NL 问答允许访问的质控表，逗号分隔
+     * @param scanCron            定时扫描 cron
+     */
+    public record Qc(
+            boolean enabled,
+            int scanDays,
+            int archiveDays,
+            int anesthesiaMaxMin,
+            double countDiffRatio,
+            String allowedTables,
+            String scanCron) {
     }
 }

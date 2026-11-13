@@ -12,7 +12,7 @@ import java.util.Properties;
  *
  * @author zhengyanchuang
  */
-final class MySqlJdbc {
+public final class MySqlJdbc {
 
     private static final int CONNECT_TIMEOUT_MS = 5_000;
     private static final int SOCKET_TIMEOUT_MS = 30_000;
@@ -20,7 +20,7 @@ final class MySqlJdbc {
     private MySqlJdbc() {
     }
 
-    static Connection open(String url, String username, String password) throws SQLException {
+    public static Connection open(String url, String username, String password) throws SQLException {
         Properties properties = new Properties();
         properties.setProperty("user", username);
         properties.setProperty("password", password == null ? "" : password);
@@ -32,7 +32,7 @@ final class MySqlJdbc {
     /**
      * 取最内层异常的消息，避免把整条异常链暴露给用户。
      */
-    static String rootMessage(Throwable throwable) {
+    public static String rootMessage(Throwable throwable) {
         Throwable current = throwable;
         while (current.getCause() != null && current.getCause() != current) {
             current = current.getCause();

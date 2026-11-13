@@ -90,6 +90,14 @@ app:
       table-aliases: ${SCHEMA_DB_TABLE_ALIASES:}
       # 中文别名建议放在独立 UTF-8 文件（每行 表名=别名），避免 .env 的 Latin-1 解码问题
       table-aliases-file: ${SCHEMA_DB_TABLE_ALIASES_FILE:./data/schema-aliases.properties}
+  qc:
+    enabled: ${QC_ENABLED:true}
+    scan-days: ${QC_SCAN_DAYS:30}
+    archive-days: ${QC_ARCHIVE_DAYS:7}
+    anesthesia-max-min: ${QC_ANESTHESIA_MAX_MIN:180}
+    count-diff-ratio: ${QC_COUNT_DIFF_RATIO:0.10}
+    allowed-tables: ${QC_ALLOWED_TABLES:hospital_surgical_qc_record,hospital_surgical_qc_setup,hospital_surgical_qc_anesthesia,hospital_surgical_qc_extraction,hospital_surgical_qc_planting,hospital_surgical_qc_flow_def}
+    scan-cron: ${QC_SCAN_CRON:0 0 6 * * *}
 
 logging:
   level:

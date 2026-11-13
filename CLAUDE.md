@@ -48,6 +48,7 @@ docker compose up -d               # Qdrant（REST 6333 / gRPC 6334）
 | `service` | 业务流程、状态流转、并发控制 | 可互相注入；不直接操作 `HttpServletRequest` |
 | `extractor` | 文件类型 → 纯文本的策略实现 | 只做提取，不做规范化 |
 | `connector` | 外部数据源 → `RawDocument` 的接入策略 | 只做拉取与行转文本；禁止按数据源类型写分支 |
+| `qc` | 手术质控：规则、扫描、异常闭环、病例 360 | 规则纯判断；外部质控表只读；异常存应用库 |
 | `ai` | `@AiService` 接口、Qdrant payload 键名 | 提示词改动需说明动机 |
 | `domain` / `repository` | JPA 实体与数据访问 | 实体不直接返回给前端 |
 | `dto` | 对外请求 / 响应模型 | 一律 `record`，提供静态 `from(...)` 映射 |
@@ -102,6 +103,9 @@ docker compose up -d               # Qdrant（REST 6333 / gRPC 6334）
 | `SQL_REJECTED` | 400 | 生成的 SQL 未通过安全校验 |
 | `SQL_GENERATION_FAILED` | 502 | 模型生成 SQL 失败 |
 | `SQL_EXECUTION_FAILED` | 500 | SQL 执行失败 |
+| `QC_CASE_NOT_FOUND` | 404 | 质控病例不存在 |
+| `QC_FINDING_NOT_FOUND` | 404 | 质控异常不存在 |
+| `QC_NO_MATCHING_TABLE` | 404 | 质控问答未找到匹配表 |
 
 ### 4.4 配置
 
@@ -178,6 +182,17 @@ PENDING → PROCESSING → READY
 - 敏感字段与默认时间字段的推断是默认规则，必须允许按表配置覆盖；推断不出时反问用户。
 - NL2SQL 生成的 SQL 必须经过 `SqlValidator`：只读、无注释、无逗号连表、强制 `LIMIT 200`；允许多表 JOIN。测试环境不做表级权限，但必须校验引用表在库中存在；校验失败不得降级执行。
 - 查询结果只对 `sensitiveColumns` 标注的列脱敏，不得把原始敏感值写进日志。
+
+### 5.8 手术质控助手
+
+- 规则知识的唯一来源是 `QcRuleRegistry`；新增规则只新增一个 `@Component implements QcRule`，不修改扫描服务。
+- 规则只做「病例 → 异常草稿」的纯判断，不直接读写数据库，便于单测与复用。
+- 外部质控表只读；异常、闭环状态、规则配置存应用库（H2，后续迁移）。
+- 扫描按 `(ruleCode, recordId)` 幂等；人工标记 `IGNORED` 的异常不得在后续扫描中被自动重新打开。
+- 质控 NL 问答必须限定在 `app.qc.allowed-tables` 范围内，不得访问客户、营销等无关表。
+- 只做质控数据检索与统计，不输出诊断、治疗建议或手术方案。
+- 病例与异常接口必须脱敏；日志不得输出完整患者敏感值。
+- 新增错误码、配置项、接口时按第 10 节同步文档。
 
 ## 6. 测试规范
 

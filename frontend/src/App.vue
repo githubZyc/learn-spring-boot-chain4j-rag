@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import DocumentUpload from './components/DocumentUpload.vue'
 import DocumentTable from './components/DocumentTable.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import SchemaPanel from './components/SchemaPanel.vue'
+import QcPanel from './components/qc/QcPanel.vue'
 import { useDocuments } from './composables/useDocuments'
 import { useChat } from './composables/useChat'
 import { useSchema } from './composables/useSchema'
+import { useQc } from './composables/useQc'
+import type { QcFindingFilters } from './types'
 
 const { documents, loading, uploading, busyId, load, upload, remove, reindex } = useDocuments()
 const { messages, streaming, error, send, stop, newConversation } = useChat()
@@ -23,7 +26,47 @@ const {
   query: querySchemaData
 } = useSchema()
 
-const activeTab = ref<'docs' | 'chat' | 'schema'>('docs')
+const {
+  overview: qcOverview,
+  findings: qcFindings,
+  total: qcTotal,
+  rules: qcRules,
+  loading: qcLoading,
+  scanning: qcScanning,
+  asking: qcAsking,
+  caseLoading: qcCaseLoading,
+  caseDetail: qcCaseDetail,
+  askResult: qcAskResult,
+  scanResult: qcScanResult,
+  rangeDays: qcRangeDays,
+  filters: qcFilters,
+  loadAll: loadQcAll,
+  scan: scanQcData,
+  setRange: setQcRange,
+  openCase: openQcCase,
+  closeCase: closeQcCase,
+  ask: askQc,
+  ack: ackQc,
+  resolve: resolveQc,
+  ignore: ignoreQc,
+  setFilters: setQcFilters
+} = useQc()
+
+const activeTab = ref<'docs' | 'chat' | 'schema' | 'qc'>('docs')
+const qcLoaded = ref(false)
+
+watch(activeTab, async (tab) => {
+  if (tab !== 'qc' || qcLoaded.value) {
+    return
+  }
+  qcLoaded.value = true
+  try {
+    await loadQcAll()
+  } catch (e) {
+    qcLoaded.value = false
+    ElMessage.error(e instanceof Error ? e.message : '加载质控数据失败')
+  }
+})
 
 onMounted(async () => {
   try {
@@ -89,6 +132,90 @@ async function handleSchemaQuery(question: string) {
     ElMessage.error(e instanceof Error ? e.message : '查询失败')
   }
 }
+
+async function handleQcRefresh() {
+  try {
+    await loadQcAll()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '刷新质控数据失败')
+  }
+}
+
+async function handleQcScan() {
+  try {
+    await scanQcData()
+    ElMessage.success('扫描完成，异常清单已更新')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '扫描失败')
+  }
+}
+
+async function handleQcRange(days: number) {
+  try {
+    await setQcRange(days)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '切换时间范围失败')
+  }
+}
+
+async function handleQcFilter(partial: Partial<QcFindingFilters>) {
+  try {
+    await setQcFilters(partial)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '筛选失败')
+  }
+}
+
+async function handleQcPage(page: number) {
+  try {
+    await setQcFilters({ page })
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '翻页失败')
+  }
+}
+
+async function handleQcView(recordId: number) {
+  try {
+    await openQcCase(recordId)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载病例失败')
+  }
+}
+
+async function handleQcAck(id: number) {
+  try {
+    await ackQc(id)
+    ElMessage.success('已认领')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '认领失败')
+  }
+}
+
+async function handleQcResolve(id: number, note: string) {
+  try {
+    await resolveQc(id, note)
+    ElMessage.success('已标记完成')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '处理失败')
+  }
+}
+
+async function handleQcIgnore(id: number, note: string) {
+  try {
+    await ignoreQc(id, note)
+    ElMessage.success('已标记为非问题')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '操作失败')
+  }
+}
+
+async function handleQcAsk(question: string) {
+  try {
+    await askQc(question)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '质控问答失败')
+  }
+}
 </script>
 
 <template>
@@ -106,11 +233,15 @@ async function handleSchemaQuery(question: string) {
           <el-radio-button value="docs">文档管理</el-radio-button>
           <el-radio-button value="chat">知识问答</el-radio-button>
           <el-radio-button value="schema">数据库知识库</el-radio-button>
+          <el-radio-button value="qc">手术质控</el-radio-button>
         </el-radio-group>
       </div>
     </header>
 
-    <main class="app-main" :class="{ 'schema-mode': activeTab === 'schema' }">
+    <main
+      class="app-main"
+      :class="{ 'schema-mode': activeTab === 'schema', 'qc-mode': activeTab === 'qc' }"
+    >
       <section class="docs-pane" :class="{ 'tab-hidden': activeTab !== 'docs' }">
         <div class="pane-card">
           <h2>上传文档</h2>
@@ -152,6 +283,35 @@ async function handleSchemaQuery(question: string) {
           @sync="handleSchemaSync"
           @ask="handleSchemaAsk"
           @query="handleSchemaQuery"
+        />
+      </section>
+
+      <section class="qc-pane" :class="{ 'tab-hidden': activeTab !== 'qc' }">
+        <QcPanel
+          :overview="qcOverview"
+          :findings="qcFindings"
+          :total="qcTotal"
+          :rules="qcRules"
+          :filters="qcFilters"
+          :loading="qcLoading"
+          :scanning="qcScanning"
+          :asking="qcAsking"
+          :ask-result="qcAskResult"
+          :case-detail="qcCaseDetail"
+          :case-loading="qcCaseLoading"
+          :scan-result="qcScanResult"
+          :range-days="qcRangeDays"
+          @refresh="handleQcRefresh"
+          @scan="handleQcScan"
+          @filter-change="handleQcFilter"
+          @page-change="handleQcPage"
+          @view-case="handleQcView"
+          @ack="handleQcAck"
+          @resolve="handleQcResolve"
+          @ignore="handleQcIgnore"
+          @ask="handleQcAsk"
+          @close-case="closeQcCase"
+          @range-change="handleQcRange"
         />
       </section>
     </main>
@@ -234,6 +394,14 @@ async function handleSchemaQuery(question: string) {
   flex-direction: column;
 }
 
+.qc-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
+}
+
 .pane-card {
   background: #fff;
   border: 1px solid #e4e7ed;
@@ -294,6 +462,11 @@ async function handleSchemaQuery(question: string) {
 
   .app-main.schema-mode .docs-pane,
   .app-main.schema-mode .chat-pane {
+    display: none;
+  }
+
+  .app-main.qc-mode .docs-pane,
+  .app-main.qc-mode .chat-pane {
     display: none;
   }
 }

@@ -72,6 +72,13 @@ public class SqlQueryService {
     }
 
     public SqlQueryResponse query(String question) {
+        return query(question, null);
+    }
+
+    /**
+     * 限定表范围的查数；{@code tableWhitelist} 为空表示允许当前库的全部表。
+     */
+    public SqlQueryResponse query(String question, Set<String> tableWhitelist) {
         AppProperties.Schema schema = properties.schema();
         if (!SchemaDatasourceSupport.configured(schema)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "SCHEMA_DATASOURCE_NOT_CONFIGURED",
@@ -84,7 +91,7 @@ public class SqlQueryService {
         ConnectorConfig config = SchemaDatasourceSupport.connectorConfig(schema.datasource());
 
         // 首轮：向量检索 + 主表优先重排，取前 N 张表
-        List<SchemaMatchDto> candidates = schemaSearchService.search(question, maxTables);
+        List<SchemaMatchDto> candidates = schemaSearchService.search(question, maxTables, tableWhitelist);
         if (candidates.isEmpty()) {
             throw new ApiException(HttpStatus.NOT_FOUND, "SCHEMA_TABLE_NOT_FOUND",
                     "没有找到与问题匹配的表，请先同步表结构或换个问法");
@@ -96,8 +103,10 @@ public class SqlQueryService {
 
         // 生成 → 检查引用表 → 缺表则加载并重试
         String generated = generateSql(question, schemas.values());
-        SqlValidator.InspectedSql inspected = SqlValidator.inspect(generated);
-        Set<String> existingTables = null;
+        SqlValidator.InspectedSql inspected = inspectSql(generated);
+        Set<String> existingTables = tableWhitelist != null && !tableWhitelist.isEmpty()
+                ? new LinkedHashSet<>(tableWhitelist)
+                : null;
 
         for (int attempt = 0; attempt < maxExpansions; attempt++) {
             Set<String> missing = missingTables(inspected.tables(), allowedTables);
@@ -106,6 +115,18 @@ public class SqlQueryService {
             }
             if (existingTables == null) {
                 existingTables = schemaExtractor.listTableNames(config);
+            }
+            if (tableWhitelist != null && !tableWhitelist.isEmpty()) {
+                // 限定场景下不允许扩展到白名单之外的表
+                Set<String> whitelistLower = tableWhitelist.stream()
+                        .map(table -> table.toLowerCase(Locale.ROOT))
+                        .collect(Collectors.toSet());
+                boolean outside = inspected.tables().stream()
+                        .anyMatch(table -> !whitelistLower.contains(table.toLowerCase(Locale.ROOT)));
+                if (outside) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "SQL_REJECTED",
+                            "SQL 引用了当前场景不允许查询的表");
+                }
             }
             LinkedHashSet<String> resolved = new LinkedHashSet<>();
             for (String table : missing) {
@@ -120,7 +141,7 @@ public class SqlQueryService {
             allowedTables.addAll(resolved);
             schemas = loadSchemas(config, allowedTables);
             generated = generateSql(question, schemas.values());
-            inspected = SqlValidator.inspect(generated);
+            inspected = inspectSql(generated);
         }
 
         Set<String> stillMissing = missingTables(inspected.tables(), allowedTables);
@@ -251,6 +272,19 @@ public class SqlQueryService {
             log.error("生成 SQL 失败：tables={}", schemas.stream().map(SchemaDocument::tableName).toList(), e);
             throw new ApiException(HttpStatus.BAD_GATEWAY, "SQL_GENERATION_FAILED",
                     "生成 SQL 失败，请稍后重试", e);
+        }
+    }
+
+    /**
+     * 基础校验失败时转成稳定的业务错误码，避免把 IllegalArgumentException 暴露成 500。
+     */
+    private static SqlValidator.InspectedSql inspectSql(String generated) {
+        try {
+            return SqlValidator.inspect(generated);
+        } catch (IllegalArgumentException e) {
+            log.warn("SQL 基础校验未通过：generated={}, reason={}", generated, e.getMessage());
+            throw new ApiException(HttpStatus.BAD_REQUEST, "SQL_REJECTED",
+                    "生成的 SQL 未通过安全校验：" + e.getMessage(), e);
         }
     }
 

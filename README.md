@@ -128,6 +128,7 @@ npm run build
 - **并发安全**：删除会先取消并等待该文档的后台任务结束，再清理向量和记录；重建索引时会拒绝重复提交。
 - **数据库知识库（找表）**：配置 MySQL 数据源后，同步 `information_schema` 表结构到独立集合 `schema_kb`，用自然语言查找表名。一表一文档，支持表别名、默认时间字段与敏感字段标注；结果会做「主表优先」重排，明细 / 共享 / 备份 / 日志类表自动降权。
 - **数据库知识库（查数）**：自然语言 → 只读 SQL → 执行 → 返回表格，支持多表 JOIN。SQL 必须通过只读、禁写、禁注释、禁逗号连表、强制 200 行与超时校验；敏感字段按列名自动脱敏。
+- **手术质控助手**：基于 `hospital_surgical_qc_*` 表做规则扫描、异常清单、病例 360、自然语言问答与闭环处理。内置 8 条规则：归档缺麻醉、应收阶段缺项、状态阶段不一致、异常终止、麻醉时长、取发/种植数量、归档超时、收费单/病历缺失。
 
 ## REST API
 
@@ -144,6 +145,15 @@ npm run build
 | `GET` | `/api/schema/status` | 数据库知识库同步状态 |
 | `POST` | `/api/schema/ask` | 自然语言找表 `{question, maxResults?}` |
 | `POST` | `/api/schema/query` | 自然语言查数（NL2SQL，支持多表 JOIN）`{question}`，返回 SQL 与结果表格 |
+| `GET` | `/api/qc/overview` | 质控看板 `?from=&to=&departId=` |
+| `GET` | `/api/qc/findings` | 质控异常分页 `?status=&severity=&ruleCode=&departId=&page=&size=` |
+| `GET` | `/api/qc/cases/{recordId}` | 病例 360（主记录 + 四阶段 + 异常） |
+| `POST` | `/api/qc/ask` | 质控范围自然语言问答 `{question}` |
+| `POST` | `/api/qc/scan` | 触发质控扫描 `?days=30` |
+| `POST` | `/api/qc/findings/{id}/ack` | 认领异常 `?operator=` |
+| `POST` | `/api/qc/findings/{id}/resolve` | 完成异常 `?operator=&note=` |
+| `POST` | `/api/qc/findings/{id}/ignore` | 标记非问题 `?operator=&note=` |
+| `GET` | `/api/qc/rules` | 质控规则列表 |
 
 SSE 事件：
 
@@ -171,6 +181,14 @@ curl -sN -X POST http://localhost:8080/api/chat/stream \
 curl -s -X POST http://localhost:6333/collections/knowledge_base/points/scroll \
   -H 'Content-Type: application/json' \
   -d '{"limit":1,"with_payload":true,"with_vector":false}'
+
+# 手术质控：扫描 + 看板 + 病例 + 问答
+curl -s -X POST "http://localhost:8080/api/qc/scan?days=120"
+curl -s "http://localhost:8080/api/qc/overview?from=2026-08-01&to=2026-11-12"
+curl -s "http://localhost:8080/api/qc/cases/1017"
+curl -s -X POST http://localhost:8080/api/qc/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"状态还是进行中但已经手术结束的病例有哪些？"}'
 ```
 
 ## 关键设计
@@ -181,6 +199,8 @@ curl -s -X POST http://localhost:6333/collections/knowledge_base/points/scroll \
 - **检索器**：由 `langchain4j-spring-boot-starter` 的 `RagAutoConfig` 基于 Qdrant `EmbeddingStore` 自动创建，检索参数在 `langchain4j.rag.retrieval.*` 配置。
 - **SSE 安全**：`SseEmitter` 发送统一加锁、完成标记保证只结束一次，客户端断开时停止写入。
 - **前端流式**：`EventSource` 不支持 POST，使用 `fetch` + `ReadableStream` 手动解析 SSE。
+- **质控规则引擎**：`QcRule` + `QcRuleRegistry`，规则是纯判断；外部质控表只读，异常与闭环状态存应用库 H2；扫描按 `(ruleCode, recordId)` 幂等，人工忽略的异常不会被重新打开。
+- **质控问答隔离**：复用 Schema RAG + NL2SQL，但表范围固定为 `hospital_surgical_qc_*`，不会问到客户/营销等无关数据。
 
 ## 已知限制
 
@@ -190,3 +210,6 @@ curl -s -X POST http://localhost:6333/collections/knowledge_base/points/scroll \
 - 数据库知识库的查数支持多表 JOIN：首轮把前 8 张候选表送入模型，模型引用其他表时会按需加载并重试（最多 2 次）；测试环境不做表级权限，只校验表在库中存在；结果最多 200 行。
 - 多表查询的表数量由 `SCHEMA_QUERY_MAX_TABLES` 与 `SCHEMA_QUERY_MAX_EXPANSIONS` 调整。
 - 测试库为 MySQL 5.7，SQL 生成提示词已避免 CTE / 窗口函数；换成 MySQL 8 后可放宽。
+- 手术质控助手当前 8 条规则、只读；测试环境不做角色权限，规则阈值在 `app.qc.*` 配置，页面级规则配置尚未实现。
+- 质控问答只允许 `hospital_surgical_qc_*` 表；跨模块的复杂问题会被拒绝，需要时再扩展表白名单。
+- 质控看板与手动扫描默认按最近 120 天统计（测试数据集中在 8~11 月）；定时扫描仍使用 `app.qc.scan-days`（默认 30 天）。需要调整前端默认值时修改 `frontend/src/composables/useQc.ts` 的 `rangeDays`。

@@ -13,6 +13,9 @@ import org.yc.learn.rag.config.AppProperties;
 import org.yc.learn.rag.dto.SchemaMatchDto;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 在 schema 集合中按自然语言检索候选表。
@@ -42,6 +45,13 @@ public class SchemaSearchService {
     }
 
     public List<SchemaMatchDto> search(String question, Integer maxResults) {
+        return search(question, maxResults, null);
+    }
+
+    /**
+     * 限定表范围的检索；用于质控等垂直场景，避免检索到无关业务表。
+     */
+    public List<SchemaMatchDto> search(String question, Integer maxResults, Set<String> allowedTables) {
         int defaultResults = properties.schema() == null ? 5 : properties.schema().maxResults();
         double minScore = properties.schema() == null ? 0.35 : properties.schema().minScore();
         int limit = maxResults == null
@@ -64,6 +74,14 @@ public class SchemaSearchService {
         List<SchemaMatchDto> candidates = schemaEmbeddingStore.search(request).matches().stream()
                 .map(SchemaMatchDto::from)
                 .toList();
+        if (allowedTables != null && !allowedTables.isEmpty()) {
+            Set<String> allowedLower = allowedTables.stream()
+                    .map(table -> table.toLowerCase(Locale.ROOT))
+                    .collect(Collectors.toSet());
+            candidates = candidates.stream()
+                    .filter(match -> allowedLower.contains(match.tableName().toLowerCase(Locale.ROOT)))
+                    .toList();
+        }
         return SchemaReranker.rerank(question, candidates, limit);
     }
 }
